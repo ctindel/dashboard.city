@@ -68,7 +68,7 @@ public class MainActivity extends AppCompatActivity {
         View mainContainer = findViewById(R.id.container);
         mainContainer.setPadding(0, 0, 0, mainContainer.getPaddingBottom() + getSoftButtonsBarSizePort(this));
     }
-    
+
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         // Inflate the menu; this adds items to the action bar if it is present.

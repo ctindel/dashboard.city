@@ -41,10 +41,11 @@ public class MainActivity extends AppCompatActivity {
             int usableHeight = metrics.heightPixels;
             activity.getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
             int realHeight = metrics.heightPixels;
-            if (realHeight > usableHeight)
+            if (realHeight > usableHeight) {
                 return realHeight - usableHeight;
-            else
+            } else {
                 return 0;
+            }
         }
         return 0;
     }

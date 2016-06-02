@@ -34,6 +34,22 @@ module.exports = function(mongoose) {
     userSchema.index({email : 1}, {unique:true});
     userSchema.index({spApiKeyId : 1}, {unique:true});
 
+    var locationSchema = new mongoose.Schema({
+        country : { type: String, trim: true },
+        countryAbbreviation : { type: String, trim: true, uppercase: true },
+        postalCode : { type: String, trim: true, uppercase: true },
+        name : { type: String, trim: true },
+        state : { type: String, trim: true },
+        stateAbbreviation : { type: String, trim: true, uppercase: true },
+        geometry: { type: { type: String, default:'Point' },
+                    coordinates: [Number] },
+    },
+    { collection: 'location' }
+    );
+
+    locationSchema.index({ geometry: '2dsphere' });
+    locationSchema.index({ postalCode: 1}, {unique:true});
+
     var weatherForecastSchema = new mongoose.Schema({
         periodName : { type: String, trim: true},
         temp : { type: Number },
@@ -80,6 +96,13 @@ module.exports = function(mongoose) {
         mongoose.model("User");
     } catch (e) {
         models.UserModel = mongoose.model('User', userSchema);
+    }
+
+    try {
+        // Throws an error if "Name" hasn't been registered
+        mongoose.model("Location");
+    } catch (e) {
+        models.LocationModel = mongoose.model('Location', locationSchema);
     }
 
     try {

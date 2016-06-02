@@ -19,6 +19,7 @@
     "mongoose": "~4.4.19",
     "morgan": "~1.5.0",
     "nodemon" : "^1.8.1",
+    "node-zippopotamus" : "^1.0.0",
     "path": "~0.4.9",
     "pretty-error": "~1.1.1",
     "serve-favicon": "^2.3.0",

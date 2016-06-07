@@ -4,21 +4,56 @@
 
 'use strict';
 
-    
 // Set default node environment to development
 process.env.NODE_ENV = process.env.NODE_ENV || 'development';
 
+var WEATHER_POLLING_INTERVAL_MINS = 60;
+var UBER_POLLING_INTERVAL_MINS = 3;
+var TRANSIT_POLLING_INTERVAL_MINS = 5;
+
+var WEATHER_API_BASE_URL = 'http://forecast.weather.gov/MapClick.php?';
+var UBER_API_BASE_URL = 'https://api.uber.com/v1/products';
+var MTA_API_BASE_URL = 'http://web.mta.info/status/serviceStatus.txt';
+
+var MTA_SERVICE_TYPES = [
+    { 'tag' : 'subway', 'docVar' : 'subway' },
+    { 'tag' : 'bus', 'docVar' : 'bus' },
+    { 'tag' : 'BT', 'docVar' : 'bridgeTunnel' },
+    { 'tag' : 'LIRR', 'docVar' : 'lirr' },
+    { 'tag' : 'MetroNorth', 'docVar' : 'mnr' },
+];
+
+var fs = require('fs');
 var mongoose = require('mongoose');
 var config = require('./config/environment');
 var zipp = require('node-zippopotamus');
 var models = require('./api/models/models')(mongoose);
 var async = require('async');
+var moment = require('moment');
+var request = require('request');
+var uber = require('uber-api')({server_token : config.uber.UBER_SERVER_TOKEN});
+var prevoty = require('prevoty').client({ key: config.prevoty.PREVOTY_API_KEY });
+var S = require('string');
+var cheerio = require('cheerio');
 
 // Connect to database
 mongoose.connect(config.mongo.uri, config.mongo.options);
 mongoose.set('debug', true);
 
-function getZipCodes() {
+function verifyPrevoty() {
+    return function(next) {
+        prevoty.verify(function(err, verified) {
+            if (!verified) {
+                return next(err);
+            }
+            return next();
+        });
+    }
+}
+
+function bootstrapPostalCodes() {
+    return [10017, 10453, 11372];
+
     var nycZips = [];
     // Bronx   
     // Central Bronx   
@@ -116,23 +151,23 @@ function getZipCodes() {
     return nycZips;
 }
 
-function loadZipCodes() {
+function loadPostalCodes() {
     var fnArray = [];
 
-    getZipCodes().forEach(function checkLocation(zip, index, array) {
+    bootstrapPostalCodes().forEach(function checkLocation(postalCode, index, array) {
         fnArray.push(function(next) {
-            models.LocationModel.find({'postalCode' : zip}, function (err, results) {
+            models.LocationModel.find({'postalCode' : postalCode}, function (err, results) {
                 if (err) {
                     console.dir(err);
-                    return next(err);
+                    return process.nextTick(function() { next(err); });
                 }
                 if (results.length == 0) {
-                    zipp('us', zip, function (err, result) {
+                    zipp('us', postalCode, function (err, result) {
                         var newLoc = new models.LocationModel(
                             {
                                 country: result['country'],
                                 countryAbbreviation: result['country abbreviation'],
-                                postalCode: zip,
+                                postalCode: postalCode,
                                 name: result['places'][0]['place name'],
                                 state: result['places'][0]['state'],
                                 stateAbbreviation: result['places'][0]['state abbreviation'],
@@ -143,15 +178,15 @@ function loadZipCodes() {
                         });
                         newLoc.save(function (err, loc) {
                             if (err) {
-                                console.log("Mongoose error creating new location for zip " + zip);
+                                console.log("Mongoose error creating new location for postalCode " + postalCode);
                             } else {
-                                console.log("Successfully save Location object for zip " + zip);
+                                console.log("Successfully save Location object for postalCode " + postalCode);
                             }
                             return process.nextTick(next);
                         });
                     });
                 } else {
-                    console.log(zip + " already loaded");
+                    console.log(postalCode + " already loaded");
                     return process.nextTick(next);
                 }
             });
@@ -161,8 +196,358 @@ function loadZipCodes() {
     return fnArray;
 }
 
+// Information about the weather.gov API here:
+// http://graphical.weather.gov/xml/
+function loadWeatherStatus(postalCode) {
+    return function(next) {
+        models.LocationModel.find({'postalCode' : postalCode}, function (err, locations) {
+            if (err) {
+                return process.nextTick(function() { next(err) } );
+            }
+            if (locations.length !== 1) {
+                return process.nextTick(function() { 
+                    next(new Error('loadWeatherStatus: invalid location result set size ' + locations.length))
+                });
+            }
+
+            var loc = locations[0];
+            var now = moment();
+            var lastUpdated = moment(loc.weatherStatus.lastUpdated);
+
+            // loc.weatherStatus.data.forecast.length is 0 only during initial load
+            if (lastUpdated.add(WEATHER_POLLING_INTERVAL_MINS, 'minutes').isBefore(now) || 
+                loc.weatherStatus.data.forecast.length === 0) {
+                console.log("Time to lookup weather status again for location: " + loc.postalCode);
+            } else {
+                console.log("Not yet time to lookup weather status again for location: " + loc.postalCode);
+                return process.nextTick(next);
+            }
+
+            var newWeatherStatus = {lastUpdated : new Date(), data : {}};
+
+            var url = WEATHER_API_BASE_URL +
+                      'lat='+loc.geometry.coordinates[1] +
+                      '&lon='+loc.geometry.coordinates[0] +
+                      '&FcstType=json';
+            // We have to fill out the User-Agent or we get denied
+            var options = {'url' : url, headers : {'User-Agent' : 'Mozilla/5.0'}};
+
+            request(options, function (err, response, body) {
+                console.log('loadWeatherStatus: loc=%s url=%s', loc.name, url);
+
+                if (err) {
+                    return process.nextTick(function() { next(err) } );
+                }
+
+                if (response.statusCode != 200) {
+                    return process.nextTick(function() { 
+                        next(new Error('loadWeatherStatus: ' + url + 
+                                       ' returned statusCode ' + response.statusCode));
+                    });
+                }
+
+                var res = JSON.parse(body);
+                //console.dir(res);
+                newWeatherStatus.info = {
+                    'siteId' : res.currentobservation.id,
+                    'siteName' : res.currentobservation.name,
+                };
+                var weather = {
+                    'current' : {
+                        'temp' : res.currentobservation.Temp,
+                        'winds' : res.currentobservation.Winds,
+                        'relativeHumidity' : res.currentobservation.Relh,
+                        'description' : res.currentobservation.Weather,
+                        'image' : res.currentobservation.Weatherimage},
+                    'forecast' : [],
+                };
+                var firstDate = moment(res.time.startValidTime[0]);
+                var stopDate = firstDate.add(1, 'days');
+
+                var date;
+                var ndx = 0;
+
+                // There can be at most 8 6-hour increments for today and tomorrow
+                // So we'll make sure we don't go past the 9th element
+                for (ndx = 0; ndx < 9; ndx++) {
+                    date = moment(res.time.startValidTime[ndx]);
+                    console.log("date: %s", date.toString());
+                    if (date.isAfter(stopDate)) {
+                        break;
+                    }
+                    var forecast = {
+                        'periodName' : res.time.startPeriodName[ndx],
+                        'tempLabel' : res.time.tempLabel[ndx],
+                        'temp' : res.data.temperature[ndx],
+                        'iconLink' : res.data.iconLink[ndx],
+                        'shortDescription' : res.data.weather[ndx],
+                        'longDescription' : res.data.text[ndx],
+                        'hazard' : res.data.hazard[ndx],
+                        'hazardUrl' : res.data.hazardUrl[ndx]
+                    };
+                    if (res.data.hazard[ndx]) {
+                        forecast.hazard = res.data.hazard[ndx];
+                    }
+                    if (res.data.hazardUrl[ndx]) {
+                        forecast.hazardUrl = res.data.hazardUrl[ndx];
+                    }
+                    weather.forecast.push(forecast);
+                }
+                newWeatherStatus.data = weather;
+                loc.update({'$set' : {'weatherStatus' : newWeatherStatus}}, function (err, numberAffected, raw) {
+                    if (err) {
+                        return process.nextTick(function() { next(err) } );
+                    };
+                    return process.nextTick(next);
+                });
+            });
+        });
+    }
+}
+
+function loadUberStatus(postalCode) {
+    return function(next) {
+        models.LocationModel.find({'postalCode' : postalCode}, function (err, locations) {
+            if (err) {
+                return process.nextTick(function() { next(err) } );
+            }
+            if (locations.length !== 1) {
+                return process.nextTick(function() { 
+                    next(new Error('loadUberStatus: invalid location result set size ' + locations.length))
+                });
+            }
+
+            var loc = locations[0];
+            var now = moment();
+            var lastUpdated = moment(loc.transitStatus.lastUpdated);
+
+            // loc.uberStatus.data.products.length is 0 only during initial load
+            if (lastUpdated.add(UBER_POLLING_INTERVAL_MINS, 'minutes').isBefore(now) || 
+                loc.uberStatus.data.products.length === 0) {
+                console.log("Time to lookup Uber status again for location: " + loc.postalCode);
+            } else {
+                console.log("Not yet time to lookup Uber status again for location: " + loc.postalCode);
+                return process.nextTick(next);
+            }
+
+            var newUberStatus = {
+                lastUpdated : new Date(), 
+                data : { 
+                    products : []
+                }
+            };
+
+            var params = {
+                sLat : loc.geometry.coordinates[1],
+                eLat : loc.geometry.coordinates[1],
+                sLng : loc.geometry.coordinates[0],
+                eLng : loc.geometry.coordinates[0],
+            };
+            // We have to use the getPriceEstimate function in order
+            // for the surge_multiplier field to show up
+            uber.getPriceEstimate(params, function(err, response) {
+//            var params = {
+//                lat : loc.geometry.coordinates[1],
+//                lng : loc.geometry.coordinates[0]
+//            };
+//            uber.getProducts(params, function(err, response) {
+                if (err) {
+                    return process.nextTick(function() { next(err) } );
+                } else {
+                    console.log("%j", response);
+                    response.prices.forEach(function processProduct(prod) {
+                    //response.products.forEach(function processProduct(prod) {
+                        var product = { name : prod.display_name,
+                                        surgeMultiplier : prod.surge_multiplier };
+                        newUberStatus.data.products.push(product);
+                    });
+                    loc.update({'$set' : {'uberStatus' : newUberStatus}}, function (err, numberAffected, raw) {
+                        if (err) {
+                            return process.nextTick(function() { next(err) } );
+                        };
+                        return process.nextTick(next);
+                    });
+                }
+            });
+        });
+    }
+}
+
+function sanitizeText(newTransitStatus, serviceType, mtaStatus, dirtyText) {
+    return function(next) {
+        console.log("Calling prevoty.filterContent for dirtyText=\"%s\"", dirtyText);
+        prevoty.filterContent(dirtyText,
+                              config.prevoty.PREVOTY_MTA_CONTENT_POLICY_KEY,
+                              function(err, filtered) {
+            if (err) {
+                return process.nextTick(function() { next(err) } );
+            }
+            console.log("After calling filterContent, cleanTest=\"%s\"", filtered.output);
+            mtaStatus.text = filtered.output;
+            newTransitStatus[serviceType['docVar']].push(mtaStatus);
+            return process.nextTick(next);
+        });
+    }
+}
+
+function saveLocation(loc, newTransitStatus) {
+    return function(next) {
+        loc.update({'$set' : {'transitStatus' : newTransitStatus}}, function (err, numberAffected, raw) {
+            if (err) {
+                return process.nextTick(function() { next(err) } );
+            };
+            return process.nextTick(next);
+        });
+    }
+}
+
+function loadTransitStatus() {
+    return function(next) {
+        models.LocationModel.find({}, function (err, locations) {
+            if (err) {
+                return process.nextTick(function() { next(err) } );
+            }
+            if (locations.length === 0) {
+                return process.nextTick(function() { 
+                    next(new Error('loadTransitStatus: invalid location result set size ' + locations.length))
+                });
+            }
+
+            var needsUpdate = false;
+            var now = moment();
+            locations.forEach(function checkUpdateTime(loc, index, array) {
+                var loc = locations[0];
+                var lastUpdated = moment(loc.transitStatus.lastUpdated);
+
+                // loc.transitStatus.subway.length is 0 only during initial load
+                if (lastUpdated.add(TRANSIT_POLLING_INTERVAL_MINS, 'minutes').isBefore(now) || 
+                    loc.transitStatus.subway.length === 0) {
+                    console.log("Time to lookup transit status again for location: " + loc.postalCode);
+                    needsUpdate = true;
+                }
+            });
+
+            if (!needsUpdate) {
+                console.log("Not yet time to lookup transit status: ");
+                return process.nextTick(next);
+            }
+
+            var newTransitStatus = {
+                lastUpdated : new Date(), 
+                serviceTimestamp : null,
+                subway : [],
+                bus : [],
+                bridgeTunnel : [],
+                lirr : [],
+                mnr : [],
+            };
+
+            var body = fs.readFileSync('serviceStatus.txt', {encoding : 'utf8'});
+            var prevotyTasks = [];
+            var serviceTimestamp = null;
+
+            var options = { 'url' : MTA_API_BASE_URL,
+                            headers : {'User-Agent' : 'Mozilla/5.0'}};
+            request(options, function (err, response, body) {
+//            var err = null;
+//            var response = { statusCode: 200 };
+//            if (true) {
+                if (err) {
+                    return process.nextTick(function() { next(err) } );
+                }
+
+                if (response.statusCode != 200) {
+                    return process.nextTick(function() { 
+                        next(new Error('loadTransitStatus: ' + 
+                                       MTA_API_BASE_URL + ' returned statusCode ' +
+                                       response.statusCode));
+                    });
+                }
+
+                // Because there are things like &amp;nbsp; we need to clean those
+                // up before doing the HTML Decode, so we just do the same thing
+                // twice.
+                var decodedBody = S(body).decodeHTMLEntities().s;
+                decodedBody = S(decodedBody).decodeHTMLEntities().s;
+
+                var $ = cheerio.load(decodedBody,
+                                     { normalizeWhitespace: true,
+                                       lowerCaseTags : false,
+                                       lowerCaseAttributeNames : false,
+                                       xmlMode: true,
+                                       decodeEntities : false});
+
+                $('service').each(function(i, elem) {
+                    var line = $(this);
+                    var responseCode = line.children('responsecode').text();
+
+                    if (responseCode !== '0') {
+                        return process.nextTick(function() { 
+                            next(new Error('loadTransitStatus: ' + 
+                                           MTA_API_BASE_URL + ' returned responseCode ' +
+                                           responseCode));
+                        });
+                    }
+
+                    newTransitStatus.serviceTimestamp = line.children('timestamp').text();
+                });
+
+                MTA_SERVICE_TYPES.forEach(function processtype(serviceType, index, array) {
+                    $(serviceType['tag']).children('line').each(function() {
+                        var line = $(this);
+                        var dirtyText = line.children('text').html();
+                        var mtaStatus = {
+                            line : line.children('name').text(),
+                            status : line.children('status').text(),
+                            date : line.children('date').text(),
+                            time : line.children('time').text(),
+                        };
+                        prevotyTasks.push(sanitizeText(newTransitStatus, serviceType, mtaStatus, dirtyText));
+                    });
+                });
+
+                async.series(prevotyTasks, function(err, results) {
+                    if (err) {
+                        return process.nextTick(function() { 
+                            next(err);
+                        });
+                    }
+                    var saveTasks = []
+
+                    locations.forEach(function updateTransit(updateLoc, index, array) {
+                        newTransitStatus.lastUpdated = now;
+                        saveTasks.push(saveLocation(updateLoc, newTransitStatus));
+                    });
+                    async.series(saveTasks, function(err, results) {
+                        if (err) {
+                            return process.nextTick(function() { 
+                                next(err);
+                            });
+                        }
+                        return process.nextTick(next);
+                    });
+                });
+            });
+            //}
+        });
+    }
+}
+
+function loadPostalCodeStatus() {
+    var fnArray = [];
+
+    bootstrapPostalCodes().forEach(function checkLocation(postalCode, index, array) {
+        //fnArray.push(loadWeatherStatus(postalCode));
+        //fnArray.push(loadUberStatus(postalCode));
+    });
+    fnArray.push(loadTransitStatus());
+    return fnArray;
+}
+
 var runArray = []
-runArray = runArray.concat(loadZipCodes());
+runArray.push(verifyPrevoty());
+runArray = runArray.concat(loadPostalCodes());
+runArray = runArray.concat(loadPostalCodeStatus());
 async.series(runArray, function finalizer(err, results) {
     if (err) {
         console.log(err);

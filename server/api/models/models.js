@@ -18,7 +18,7 @@ module.exports = function(mongoose) {
         locations: { 
             type: [
                 {name: { type: String, trim:true },
-                 zip: { type: String, trim:true },
+                 postalCode: { type: String, trim:true },
                  _id : false }
             ],
             default: [],
@@ -34,22 +34,6 @@ module.exports = function(mongoose) {
     userSchema.index({email : 1}, {unique:true});
     userSchema.index({spApiKeyId : 1}, {unique:true});
 
-    var locationSchema = new mongoose.Schema({
-        country : { type: String, trim: true },
-        countryAbbreviation : { type: String, trim: true, uppercase: true },
-        postalCode : { type: String, trim: true, uppercase: true },
-        name : { type: String, trim: true },
-        state : { type: String, trim: true },
-        stateAbbreviation : { type: String, trim: true, uppercase: true },
-        geometry: { type: { type: String, default:'Point' },
-                    coordinates: [Number] },
-    },
-    { collection: 'location' }
-    );
-
-    locationSchema.index({ geometry: '2dsphere' });
-    locationSchema.index({ postalCode: 1}, {unique:true});
-
     var weatherForecastSchema = new mongoose.Schema({
         periodName : { type: String, trim: true},
         temp : { type: Number },
@@ -62,11 +46,11 @@ module.exports = function(mongoose) {
     { _id : false }
     );
 
-    var zipcodeWeatherStatusSchema = new mongoose.Schema({
-        zipcode : { type: String, trim: true},
+    var locationWeatherStatusSchema = new mongoose.Schema({
         current : {
             temp : { type: String, trim: true},
             winds : { type: String, trim: true},
+            relativeHumidity : { type: String, trim: true},
             description : { type: String, trim: true},
             image : { type: String, trim: true}
         },
@@ -75,19 +59,65 @@ module.exports = function(mongoose) {
     { _id : false }
     );
 
-    var zipcodeUberProductSchema = new mongoose.Schema({
+    var locationUberProductSchema = new mongoose.Schema({
         name : { type: String, trim: true},
         surgeMultiplier : { type: Number }
     },
     { _id : false }
     );
 
-    var zipcodeUberStatusSchema = new mongoose.Schema({
-        borough : { type: String, trim: true},
-        products : [zipcodeUberProductSchema]
+    var locationUberStatusSchema = new mongoose.Schema({
+        products : [locationUberProductSchema]
     },
     { _id : false }
     );
+
+    var mtaServiceStatusSchema = new mongoose.Schema({
+        line : { type: String, trim: true},
+        status : { type: String, trim: true},
+        text : { type: String, trim: true},
+        date : { type: String, trim: true},
+        time : { type: String, trim: true},
+    },
+    { _id : false }
+    );
+
+    var locationSchema = new mongoose.Schema({
+        country : { type: String, trim: true },
+        countryAbbreviation : { type: String, trim: true, uppercase: true },
+        postalCode : { type: String, trim: true, uppercase: true },
+        name : { type: String, trim: true },
+        state : { type: String, trim: true },
+        stateAbbreviation : { type: String, trim: true, uppercase: true },
+        geometry: { type: { type: String, default:'Point' },
+                    coordinates: [Number] },
+        weatherStatus : {
+            lastUpdated : { type: Date, default: Date.now },
+            data : { type: locationWeatherStatusSchema, default : {} },
+            info : { 
+                siteId: { type: String, trim: true, uppercase: true },
+                siteName: { type: String, trim: true, uppercase: true },
+            }
+        },
+        uberStatus : {
+            lastUpdated : { type: Date, default: Date.now },
+            data : { type: locationUberStatusSchema, default : {} },
+        },
+        transitStatus : {
+            lastUpdated : { type: Date, default: Date.now },
+            serviceTimestamp : { type: String, trim: true },
+            subway : [mtaServiceStatusSchema],
+            bus : [mtaServiceStatusSchema],
+            bridgeTunnel : [mtaServiceStatusSchema],
+            lirr : [mtaServiceStatusSchema],
+            mnr : [mtaServiceStatusSchema],
+        }
+    },
+    { collection: 'location' }
+    );
+
+    locationSchema.index({ geometry: '2dsphere' });
+    locationSchema.index({ postalCode: 1}, {unique:true});
 
     var models = {'MAX_USER_LOCATIONS' : MAX_USER_LOCATIONS};
     
@@ -114,23 +144,23 @@ module.exports = function(mongoose) {
 
     try {
         // Throws an error if "Name" hasn't been registered
-        mongoose.model("zipcodeWeatherStatus");
+        mongoose.model("locationWeatherStatus");
     } catch (e) {
-        models.zipcodeWeatherStatusModel = mongoose.model('zipcodeWeatherStatus', zipcodeWeatherStatusSchema);
+        models.locationWeatherStatusModel = mongoose.model('locationWeatherStatus', locationWeatherStatusSchema);
     }
 
     try {
         // Throws an error if "Name" hasn't been registered
-        mongoose.model("zipcodeUberProduct");
+        mongoose.model("locationUberProduct");
     } catch (e) {
-        models.zipcodeUberProductModel = mongoose.model('zipcodeUberProduct', zipcodeUberProductSchema);
+        models.locationUberProductModel = mongoose.model('locationUberProduct', locationUberProductSchema);
     }
 
     try {
         // Throws an error if "Name" hasn't been registered
-        mongoose.model("zipcodeUberStatus");
+        mongoose.model("locationUberStatus");
     } catch (e) {
-        models.zipcodeUberStatusModel = mongoose.model('zipcodeUberStatus', zipcodeUberStatusSchema);
+        models.locationUberStatusModel = mongoose.model('locationUberStatus', locationUberStatusSchema);
     }
 
     return models;

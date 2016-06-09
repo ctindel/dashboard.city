@@ -178,7 +178,7 @@ UserController.prototype.addLocation = function(req, res) {
     var resultStatus = null;
     var resultJSON = {feeds : []};
     var locationName = req.param('locationName');
-    var locationZip = req.param('locationZip');
+    var locationPostalCode = req.param('locationPostalCode');
 
     if(req.authenticationError){
         console.log("Authentication Error: ");
@@ -191,7 +191,7 @@ UserController.prototype.addLocation = function(req, res) {
         res.status(400);
         res.json({error: errStr});
         return;
-    } else if (undefined == locationZip) {
+    } else if (undefined == locationPostalCode) {
         errStr = "Undefined Location Zip";
         _logger.debug(errStr);
         res.status(400);
@@ -200,7 +200,7 @@ UserController.prototype.addLocation = function(req, res) {
     }
 
     _logger.debug('Adding locationName "' + locationName + 
-                  '", locationZip "' + locationZip + 
+                  '", locationPostalCode "' + locationPostalCode + 
                   '" for ' + req.user.email);
 
     var addLocationsTasks = [
@@ -239,7 +239,7 @@ UserController.prototype.addLocation = function(req, res) {
             cb(null);
         },
         function addLocationToUser(cb) {
-            user.locations.addToSet({'name' : locationName, 'zip' : locationZip});
+            user.locations.addToSet({'name' : locationName, 'postalCode' : locationPostalCode});
             user.save(function(err, user) {
                 if (err && null == resultStatus) {
                     errStr = 'Error saving user ' + user.email
@@ -251,7 +251,7 @@ UserController.prototype.addLocation = function(req, res) {
                     return;
                 } else {
                     _logger.debug('Successfully added locationName "' + locationName + 
-                                  '", locationZip "' + locationZip + 
+                                  '", locationPostalCode "' + locationPostalCode + 
                                   '" for ' + req.user.email);
                     resultJSON = {'user' : user};
                     cb(null);
@@ -278,7 +278,7 @@ UserController.prototype.removeLocation = function(req, res) {
     var resultStatus = null;
     var resultJSON = {feeds : []};
     var locationName = req.param('locationName');
-    var locationZip = req.param('locationZip');
+    var locationPostalCode = req.param('locationPostalCode');
     var state = {};
 
     if(req.authenticationError){
@@ -292,7 +292,7 @@ UserController.prototype.removeLocation = function(req, res) {
         res.status(400);
         res.json({error: errStr});
         return;
-    } else if (undefined == locationZip) {
+    } else if (undefined == locationPostalCode) {
         errStr = "Undefined Location Zip";
         _logger.debug(errStr);
         res.status(400);
@@ -301,7 +301,7 @@ UserController.prototype.removeLocation = function(req, res) {
     }
 
     _logger.debug('Removing locationName "' + locationName + 
-                  '", locationZip "' + locationZip + 
+                  '", locationPostalCode "' + locationPostalCode + 
                   '" for ' + req.user.email);
 
     var removeLocationsTasks = [
@@ -330,7 +330,7 @@ UserController.prototype.removeLocation = function(req, res) {
             var found = false;
 
             user.locations.forEach(function checkLocation(loc, index, array) {
-                if (loc.name == locationName && loc.zip == locationZip) {
+                if (loc.name == locationName && loc.postalCode == locationPostalCode) {
                     found = true;
                     // This is faster than trying to reload the object from the
                     // db afer we do the update
@@ -339,7 +339,7 @@ UserController.prototype.removeLocation = function(req, res) {
             }); 
             if (false == found) {
                 errStr = 'User does not have location locationName "' + locationName +
-                                 '", locationZip "' + locationZip + '"';
+                                 '", locationPostalCode "' + locationPostalCode + '"';
                 resultStatus = 404;
                 resultJSON = { error : errStr };
                 _logger.debug(errStr);
@@ -350,12 +350,12 @@ UserController.prototype.removeLocation = function(req, res) {
         },
         function removeLocationFromUser(cb) {
             user.update( 
-                { $pull: { locations : { name : locationName, zip : locationZip } } },
+                { $pull: { locations : { name : locationName, postalCode : locationPostalCode } } },
                 { safe : true },
                 function removeLocationCB(err, result) {
                     if (err) {
                         errStr = 'Error removing locationName "' + locationName + 
-                                 '", locationZip "' + locationZip + 
+                                 '", locationPostalCode "' + locationPostalCode + 
                                  '" for ' + req.user.email + ": " + JSON.stringify(err);
                         resultStatus = 400;
                         resultJSON = { error : errStr };
@@ -364,7 +364,7 @@ UserController.prototype.removeLocation = function(req, res) {
                         return;
                     } else {
                         _logger.debug('Successfully removed locationName "' + locationName + 
-                                      '", locationZip "' + locationZip + 
+                                      '", locationPostalCode "' + locationPostalCode + 
                                       '" for ' + req.user.email);
                         resultJSON = {'user' : user};
                         cb(null);

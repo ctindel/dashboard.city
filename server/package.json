@@ -30,6 +30,14 @@
     "string": "^3.3.1",
     "uber-api": "^0.3.3",
     "validator": "~3.27.0",
-    "winston": "~0.8.3"
+    "winston": "~0.8.3",
+    "rimraf": "^2.4.3"
+  },
+  "scripts": {
+    "clean": "rimraf node_modules tsd_typings",
+    "clean-install": "npm run clean && npm install",
+    "clean-start": "npm run clean && npm start",
+    "server": "./node_modules/nodemon/bin/nodemon.js app.js",
+    "start": "npm run server"
   }
 }

@@ -537,8 +537,8 @@ function loadPostalCodeStatus() {
     var fnArray = [];
 
     bootstrapPostalCodes().forEach(function checkLocation(postalCode, index, array) {
-        //fnArray.push(loadWeatherStatus(postalCode));
-        //fnArray.push(loadUberStatus(postalCode));
+        fnArray.push(loadWeatherStatus(postalCode));
+        fnArray.push(loadUberStatus(postalCode));
     });
     fnArray.push(loadTransitStatus());
     return fnArray;
